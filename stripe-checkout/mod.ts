@@ -20,6 +20,8 @@ const SetupSchema = z.object({
   api_key: z.string(),
 });
 
+const UUIDSchema = z.string().uuid();
+
 const CheckoutSchema = z.object({
   items: z.object({
     name: z.string(),
@@ -59,6 +61,21 @@ app.use("*", async (_, next) => {
   await client.end();
 });
 
+app.use("*", async (c, next) => {
+  try {
+    const authToken = c.req.headers.get("Authorization")?.split(" ")[1];
+    const token = Deno.env.get("AUTH_TOKEN");
+
+    if (authToken != undefined && token != undefined && token == authToken) {
+      await next();
+    } else {
+      throw new AuthError("No token");
+    }
+  } catch (error) {
+    return HandleError(error);
+  }
+});
+
 app.post("/setup", async (c) => {
   try {
     const body = await c.req.json();
@@ -76,37 +93,23 @@ app.post("/setup", async (c) => {
   }
 });
 
-app.use("*", async (c, next) => {
+app.post("/checkout/:id", async (c) => {
   try {
-    const authToken = c.req.headers.get("Authorization")?.split(" ")[1];
+    const publicId = UUIDSchema.parse(c.req.param("id"));
 
-    if (authToken != undefined) {
-      const results = await client
-        .queryObject<
-        Plugin
-      >`select data from plugins where public_id = ${authToken} limit 1`;
+    const results = await client
+      .queryObject<
+      Plugin
+    >`select data from plugins where public_id = ${publicId} limit 1`;
 
-      const shop = results.rows[0];
+    const shop = results.rows[0];
 
-      c.set("stripeApiToken", shop.data.api_key);
-
-      await next();
-    } else {
-      throw new AuthError("No token");
-    }
-  } catch (error) {
-    return HandleError(error);
-  }
-});
-
-app.post("/checkout", async (c) => {
-  try {
     const body = await c.req.json();
     const checkoutObj = CheckoutSchema.parse(body);
 
     const data = await GenerateCheckout({
       checkout: checkoutObj,
-      stripeApiToken: c.get("stripeApiToken"),
+      stripeApiToken: shop.data.api_key,
     });
 
     return c.json(data);

@@ -20,7 +20,23 @@ const SetupSchema = z.object({
   api_key: z.string(),
 });
 
+const CheckoutSchema = z.object({
+  items: z.object({
+    name: z.string(),
+    price: z.number().nonnegative(),
+    quantity: z.number().positive(),
+    image_url: z.string().url(),
+  }).array(),
+  currency: z.string().length(3),
+  orderId: z.string(),
+  shop: z.object({
+    url: z.string().url(),
+    regions: z.string().array(),
+  }),
+});
+
 type Setup = z.infer<typeof SetupSchema>;
+type Checkout = z.infer<typeof CheckoutSchema>;
 
 type Plugin = {
   id: number;
@@ -85,18 +101,11 @@ app.use("*", async (c, next) => {
 
 app.post("/checkout", async (c) => {
   try {
+    const body = await c.req.json();
+    const checkoutObj = CheckoutSchema.parse(body);
+
     const data = await GenerateCheckout({
-      items: [{
-        name: "test",
-        price: 300,
-        quantity: 3,
-      }],
-      currency: "SEK",
-      orderId: "test-1",
-      shop: {
-        regions: ["SE", "NO", "DK", "FI"],
-        url: "https://test.example.com/shop",
-      },
+      checkout: checkoutObj,
       stripeApiToken: c.get("stripeApiToken"),
     });
 
@@ -121,6 +130,7 @@ function HandleError(error: Error): Response {
       },
     );
   } else {
+    console.error(error);
     return new Response(
       JSON.stringify({
         msg: "Server error, try again later",
@@ -133,29 +143,20 @@ function HandleError(error: Error): Response {
 }
 
 async function GenerateCheckout(params: {
-  items: Array<{
-    name: string;
-    price: number;
-    quantity: number;
-  }>;
-  currency: string;
-  orderId: string;
-  shop: {
-    url: string;
-    regions: Array<string>;
-  };
+  checkout: Checkout;
   stripeApiToken: string;
 }) {
   const stripe = Stripe(params.stripeApiToken, {
     httpClient: Stripe.createFetchHttpClient(),
   });
 
-  const cartItems = params.items.map((item) => {
+  const cartItems = params.checkout.items.map((item) => {
     return {
       price_data: {
-        currency: params.currency,
+        currency: params.checkout.currency,
         product_data: {
           name: item.name,
+          images: [item.image_url],
         },
         unit_amount: item.price * 100,
       },
@@ -171,10 +172,10 @@ async function GenerateCheckout(params: {
   const session = await stripe.checkout.sessions.create({
     line_items: cartItems,
     metadata: {
-      orderId: params.orderId,
+      orderId: params.checkout.orderId,
     },
     shipping_address_collection: {
-      allowed_countries: params.shop.regions,
+      allowed_countries: params.checkout.shop.regions,
     },
     shipping_options: [
       {
@@ -182,7 +183,7 @@ async function GenerateCheckout(params: {
           type: "fixed_amount",
           fixed_amount: {
             amount: 0,
-            currency: params.currency,
+            currency: params.checkout.currency,
           },
           display_name: "Free shipping",
           // Delivers between 5-7 business days
@@ -203,7 +204,7 @@ async function GenerateCheckout(params: {
           type: "fixed_amount",
           fixed_amount: {
             amount: 1500,
-            currency: params.currency,
+            currency: params.checkout.currency,
           },
           display_name: "Next day air",
           delivery_estimate: {
@@ -220,8 +221,8 @@ async function GenerateCheckout(params: {
       },
     ],
     mode: "payment",
-    success_url: `${params.shop.url}/success`,
-    cancel_url: `${params.shop.url}/cancel`,
+    success_url: `${params.checkout.shop.url}/success`,
+    cancel_url: `${params.checkout.shop.url}/cancel`,
     expires_at: Math.floor(Date.now() / 1000) + (3600 * 1),
   });
 

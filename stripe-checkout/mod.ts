@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.155.0/http/server.ts";
 import { Hono } from "https://deno.land/x/hono@v3.0.0-rc.8/mod.ts";
 import Stripe from "https://esm.sh/stripe@9.9.0?target=deno";
 import { Client } from "https://deno.land/x/postgres@v0.17.0/mod.ts";
+import { z, ZodError } from "https://deno.land/x/zod@v3.21.4/mod.ts";
 import "https://deno.land/std@0.181.0/dotenv/load.ts";
 
 const client = new Client({
@@ -15,6 +16,25 @@ type Variables = {
   stripeApiToken: string;
 };
 
+const SetupSchema = z.object({
+  api_key: z.string(),
+});
+
+type Setup = z.infer<typeof SetupSchema>;
+
+type Plugin = {
+  id: number;
+  public_id: string;
+  data: Setup;
+};
+
+class AuthError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AuthError";
+  }
+}
+
 const app = new Hono<{ Variables: Variables }>();
 
 app.use("*", async (_, next) => {
@@ -23,9 +43,21 @@ app.use("*", async (_, next) => {
   await client.end();
 });
 
-app.post("/setup", (c) => {
-  //TODO: setup a new connection to turquoze
-  return c.json({ "msg": "ok" });
+app.post("/setup", async (c) => {
+  try {
+    const body = await c.req.json();
+    const setupObj = SetupSchema.parse(body);
+
+    const results = await client
+      .queryObject<
+      Plugin
+    >`INSERT INTO plugins(public_id, data) VALUES (${crypto.randomUUID()}, ${setupObj}) RETURNING public_id`;
+
+    const id = results.rows[0].public_id;
+    return c.json({ id });
+  } catch (error) {
+    return HandleError(error);
+  }
 });
 
 app.use("*", async (c, next) => {
@@ -34,22 +66,20 @@ app.use("*", async (c, next) => {
 
     if (authToken != undefined) {
       const results = await client
-        .queryObject`select data from plugins where public_id = ${authToken} limit 1`;
+        .queryObject<
+        Plugin
+      >`select data from plugins where public_id = ${authToken} limit 1`;
 
-      const shop = results.rows[0] as {
-        id: number;
-        data: { stripeApiToken: string };
-      };
+      const shop = results.rows[0];
 
-      c.set("stripeApiToken", shop.data.stripeApiToken);
+      c.set("stripeApiToken", shop.data.api_key);
 
       await next();
+    } else {
+      throw new AuthError("No token");
     }
-
-    throw new Error("No token");
   } catch (error) {
-    console.error(error);
-    return c.json({ message: "Unauthorized" }, 401);
+    return HandleError(error);
   }
 });
 
@@ -72,12 +102,35 @@ app.post("/checkout", async (c) => {
 
     return c.json(data);
   } catch (error) {
-    console.error(error);
-    return c.json({ msg: "server error" }, 500);
+    return HandleError(error);
   }
 });
 
-app.get("*", (c) => c.json({ msg: "test" }));
+function HandleError(error: Error): Response {
+  if (error instanceof ZodError) {
+    return new Response(JSON.stringify(error), {
+      status: 400,
+    });
+  } else if (error instanceof AuthError) {
+    return new Response(
+      JSON.stringify({
+        msg: "Unauthorized",
+      }),
+      {
+        status: 401,
+      },
+    );
+  } else {
+    return new Response(
+      JSON.stringify({
+        msg: "Server error, try again later",
+      }),
+      {
+        status: 500,
+      },
+    );
+  }
+}
 
 async function GenerateCheckout(params: {
   items: Array<{
@@ -94,8 +147,6 @@ async function GenerateCheckout(params: {
   stripeApiToken: string;
 }) {
   const stripe = Stripe(params.stripeApiToken, {
-    // This is needed to use the Fetch API rather than relying on the Node http
-    // package.
     httpClient: Stripe.createFetchHttpClient(),
   });
 
@@ -173,8 +224,6 @@ async function GenerateCheckout(params: {
     cancel_url: `${params.shop.url}/cancel`,
     expires_at: Math.floor(Date.now() / 1000) + (3600 * 1),
   });
-
-  //TODO: add payment info to turquoze db.
 
   return {
     type: "URL",

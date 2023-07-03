@@ -55,12 +55,6 @@ class AuthError extends Error {
 
 const app = new Hono<{ Variables: Variables }>();
 
-app.use("*", async (_, next) => {
-  await client.connect();
-  await next();
-  await client.end();
-});
-
 app.use("*", async (c, next) => {
   try {
     const authToken = c.req.headers.get("Authorization")?.split(" ")[1];
@@ -81,11 +75,12 @@ app.post("/setup", async (c) => {
     const body = await c.req.json();
     const setupObj = SetupSchema.parse(body);
 
+    await client.connect();
     const results = await client
       .queryObject<
       Plugin
     >`INSERT INTO plugins(public_id, data) VALUES (${crypto.randomUUID()}, ${setupObj}) RETURNING public_id`;
-
+    await client.end();
     const id = results.rows[0].public_id;
     return c.json({ id });
   } catch (error) {
@@ -97,11 +92,12 @@ app.post("/checkout/:id", async (c) => {
   try {
     const publicId = UUIDSchema.parse(c.req.param("id"));
 
+    await client.connect();
     const results = await client
       .queryObject<
       Plugin
     >`select data from plugins where public_id = ${publicId} limit 1`;
-
+    await client.end();
     const shop = results.rows[0];
 
     const body = await c.req.json();

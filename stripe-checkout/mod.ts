@@ -1,26 +1,8 @@
-import { serve } from "https://deno.land/std@0.155.0/http/server.ts";
-import { Hono } from "https://deno.land/x/hono@v3.0.0-rc.8/mod.ts";
+import { serve } from "https://deno.land/std@0.192.0/http/mod.ts";
+import { Hono } from "https://deno.land/x/hono@v3.2.7/mod.ts";
 import Stripe from "https://esm.sh/stripe@9.9.0?target=deno";
-import { Client } from "https://deno.land/x/postgres@v0.17.0/mod.ts";
 import { z, ZodError } from "https://deno.land/x/zod@v3.21.4/mod.ts";
 import "https://deno.land/std@0.181.0/dotenv/load.ts";
-
-const client = new Client({
-  user: Deno.env.get("DATABASE_USERNAME"),
-  database: Deno.env.get("DATABASE"),
-  hostname: Deno.env.get("DATABASE_HOST"),
-  password: Deno.env.get("DATABASE_PASSWORD"),
-});
-
-type Variables = {
-  stripeApiToken: string;
-};
-
-const SetupSchema = z.object({
-  api_key: z.string(),
-});
-
-const UUIDSchema = z.string().uuid();
 
 const CheckoutSchema = z.object({
   items: z.object({
@@ -37,14 +19,7 @@ const CheckoutSchema = z.object({
   }),
 });
 
-type Setup = z.infer<typeof SetupSchema>;
 type Checkout = z.infer<typeof CheckoutSchema>;
-
-type Plugin = {
-  id: number;
-  public_id: string;
-  data: Setup;
-};
 
 class AuthError extends Error {
   constructor(message: string) {
@@ -53,7 +28,7 @@ class AuthError extends Error {
   }
 }
 
-const app = new Hono<{ Variables: Variables }>();
+const app = new Hono();
 
 app.use("*", async (c, next) => {
   try {
@@ -70,42 +45,16 @@ app.use("*", async (c, next) => {
   }
 });
 
-app.post("/setup", async (c) => {
-  try {
-    const body = await c.req.json();
-    const setupObj = SetupSchema.parse(body);
-
-    await client.connect();
-    const results = await client
-      .queryObject<
-      Plugin
-    >`INSERT INTO plugins(public_id, data) VALUES (${crypto.randomUUID()}, ${setupObj}) RETURNING public_id`;
-    await client.end();
-    const id = results.rows[0].public_id;
-    return c.json({ id });
-  } catch (error) {
-    return HandleError(error);
-  }
-});
-
 app.post("/checkout/:id", async (c) => {
   try {
-    const publicId = UUIDSchema.parse(c.req.param("id"));
-
-    await client.connect();
-    const results = await client
-      .queryObject<
-      Plugin
-    >`select data from plugins where public_id = ${publicId} limit 1`;
-    await client.end();
-    const shop = results.rows[0];
+    //const publicId = UUIDSchema.parse(c.req.param("id"));
 
     const body = await c.req.json();
     const checkoutObj = CheckoutSchema.parse(body);
 
     const data = await GenerateCheckout({
       checkout: checkoutObj,
-      stripeApiToken: shop.data.api_key,
+      stripeApiToken: Deno.env.get("STRIPE_TOKEN")!,
     });
 
     return c.json(data);

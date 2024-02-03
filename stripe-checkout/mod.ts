@@ -1,8 +1,7 @@
-import { serve } from "https://deno.land/std@0.192.0/http/mod.ts";
-import { Hono } from "https://deno.land/x/hono@v3.2.7/mod.ts";
-import Stripe from "https://esm.sh/stripe@9.9.0?target=deno";
-import { z, ZodError } from "https://deno.land/x/zod@v3.21.4/mod.ts";
-import "https://deno.land/std@0.181.0/dotenv/load.ts";
+import { Hono } from "https://deno.land/x/hono@v3.12.10/mod.ts";
+import Stripe from "npm:stripe@14.14.0";
+import { z, ZodError } from "https://deno.land/x/zod@v3.22.4/mod.ts";
+import { logger } from "https://deno.land/x/hono@v3.12.10/middleware.ts";
 
 const CheckoutSchema = z.object({
   items: z.object({
@@ -30,9 +29,11 @@ class AuthError extends Error {
 
 const app = new Hono();
 
+app.use("*", logger());
+
 app.use("*", async (c, next) => {
   try {
-    const authToken = c.req.headers.get("Authorization")?.split(" ")[1];
+    const authToken = c.req.header("Authorization")?.split(" ")[1];
     const token = Deno.env.get("AUTH_TOKEN");
 
     if (authToken != undefined && token != undefined && token == authToken) {
@@ -94,7 +95,7 @@ async function GenerateCheckout(params: {
   checkout: Checkout;
   stripeApiToken: string;
 }) {
-  const stripe = Stripe(params.stripeApiToken, {
+  const stripe = new Stripe(params.stripeApiToken, {
     httpClient: Stripe.createFetchHttpClient(),
   });
 
@@ -106,7 +107,7 @@ async function GenerateCheckout(params: {
           name: item.name,
           images: [item.image_url],
         },
-        unit_amount: item.price * 100,
+        unit_amount: item.price,
       },
       adjustable_quantity: {
         enabled: true,
@@ -117,13 +118,17 @@ async function GenerateCheckout(params: {
     };
   });
 
+  const allowed_countries = params.checkout.shop.regions as Array<
+    Stripe.Checkout.SessionCreateParams.ShippingAddressCollection.AllowedCountry
+  >;
+
   const session = await stripe.checkout.sessions.create({
     line_items: cartItems,
     metadata: {
       orderId: params.checkout.orderId,
     },
     shipping_address_collection: {
-      allowed_countries: params.checkout.shop.regions,
+      allowed_countries: allowed_countries,
     },
     shipping_options: [
       {
@@ -181,4 +186,4 @@ async function GenerateCheckout(params: {
   };
 }
 
-serve(app.fetch);
+Deno.serve(app.fetch);

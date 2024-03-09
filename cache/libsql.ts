@@ -43,18 +43,26 @@ export default class LibSqlCacheService implements ICacheService {
   async set<T>(
     params: { shop: string; key: string; data: T; expire?: number | undefined },
   ): Promise<void> {
-    const key = `${params.shop}-${params.key}`;
-    const data = JSON.stringify(params.data);
-    const expire = new Date();
-    // default of 600 seconds
-    expire.setSeconds(expire.getSeconds() + (params.expire ?? 60 * 10));
+    try {
+      const key = `${params.shop}-${params.key}`;
+      const data = JSON.stringify(params.data);
+      const expire = new Date();
+      // default of 600 seconds
+      expire.setSeconds(expire.getSeconds() + (params.expire ?? 60 * 10));
 
-    await this.#db.execute({
-      sql: `INSERT INTO turquoze_cache (key, value, expire) VALUES (?, ?, ?)`,
-      args: [key, data, expire.toISOString()],
-    });
+      await this.#db.execute({
+        sql: `INSERT INTO turquoze_cache (key, value, expire) VALUES (?, ?, ?)`,
+        args: [key, data, expire.toISOString()],
+      });
 
-    this.#deleteExpireItems();
+      this.#deleteExpireItems();
+    } catch (error) {
+      if (
+        error.name != "LibsqlError" && !error.code.includes("SQLITE_CONSTRAINT")
+      ) {
+        throw error;
+      }
+    }
   }
 
   async delete(shop: string, key: string): Promise<void> {

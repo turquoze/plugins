@@ -30,6 +30,24 @@ Deno.test("LibSqlCacheService", {
     }
   });
 
+  await t.step("insert into cache - same", async () => {
+    try {
+      await libsqlCache.set({
+        key: "test-cache",
+        shop: shop,
+        data: {
+          test: 123,
+          msg: "hello world",
+        },
+      });
+
+      assert(true);
+    } catch (error) {
+      console.log(error);
+      assert(false);
+    }
+  });
+
   await t.step("get from cache", async () => {
     const data = await libsqlCache.get<{ test: number; msg: string }>(
       shop,
